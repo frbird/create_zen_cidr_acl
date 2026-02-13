@@ -7,16 +7,16 @@ via environment variables, and generates ACL/prefix-list config for Arista, Juni
 or Cisco to exclude traffic destined for Zscaler ranges from normal routing (e.g.
 send to Zscaler tunnel via PBR).
 
-Environment variables:
-  ZS_URL                    - JSON URL (default: Zscaler CENR endpoint with continent/city hierarchy)
-  ZS_CONTINENTS             - Comma-separated continents to include (default: all)
-  ZS_CITIES                 - Comma-separated cities to include (default: all)
-  ZS_CACHE_MAX_AGE_SECONDS  - Max cache age before refetch (default: 86400 = 24h)
-  ZS_CHECK_INTERVAL_HOURS   - Alternative: refresh interval in hours (overrides above if set)
-  ZS_DEVICE                 - Output format: auto | arista | juniper | cisco
-  ZS_ACL_NAME               - ACL/filter name (default: ZSCALER-PBR)
-  ZS_CACHE_FILE             - Path to cache file (default: .zs_dc_cache.json)
-  ZS_OUTPUT_FILE            - Write config to file instead of stdout (optional)
+Configuration (environment variables or CLI flags; flags override env):
+  ZS_URL / --url                    - JSON URL (default: Zscaler CENR endpoint)
+  ZS_CONTINENTS / --continents      - Comma-separated continents to include (default: all)
+  ZS_CITIES / --cities              - Comma-separated cities to include (default: all)
+  ZS_CACHE_MAX_AGE_SECONDS / --cache-max-age  - Max cache age in seconds (default: 86400)
+  ZS_CHECK_INTERVAL_HOURS / --check-interval-hours - Refresh interval in hours (overrides above)
+  ZS_DEVICE / --device              - Output format: auto | arista | juniper | cisco
+  ZS_ACL_NAME / --acl-name          - ACL/filter name (default: ZSCALER-PBR)
+  ZS_CACHE_FILE / --cache-file      - Path to cache file (default: .zs_dc_cache.json)
+  ZS_OUTPUT_FILE / --output-file    - Write config to file instead of stdout (optional)
 """
 
 from __future__ import annotations
@@ -352,21 +352,48 @@ def generate_acl(device: str, name: str, ranges: set[str]) -> list[str]:
 # -----------------------------------------------------------------------------
 
 
+def _resolve(key: str, flag_val: str | int | None, default: str | None = None) -> str | None:
+    """Return flag value if set, else env value, else default."""
+    if flag_val is not None and flag_val != "":
+        return str(flag_val)
+    return env(key) or default
+
+
+def _resolve_int(key: str, flag_val: int | None, default: int) -> int:
+    """Return flag value if set (>0 or explicitly 0), else env value, else default."""
+    if flag_val is not None:
+        return flag_val
+    return env_int(key, default)
+
+
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="Generate PBR ACL from Zscaler DC JSON")
+    parser = argparse.ArgumentParser(
+        description="Generate PBR ACL from Zscaler DC JSON. "
+        "All options can be set via environment variables or CLI flags; flags override env."
+    )
     parser.add_argument("--list", action="store_true", help="List continents and cities then exit")
     parser.add_argument("--list-continents", action="store_true", help="List continents only")
-    parser.add_argument("--list-cities", action="store_true", help="List cities only (optionally filtered by ZS_CONTINENTS)")
+    parser.add_argument("--list-cities", action="store_true", help="List cities only (optionally filtered by --continents)")
+    parser.add_argument("--url", metavar="URL", help="JSON endpoint or local path (overrides ZS_URL)")
+    parser.add_argument("--continents", metavar="LIST", help="Comma-separated continents (overrides ZS_CONTINENTS)")
+    parser.add_argument("--cities", metavar="LIST", help="Comma-separated cities (overrides ZS_CITIES)")
+    parser.add_argument("--cache-max-age", type=int, metavar="SEC", help="Cache max age in seconds (overrides ZS_CACHE_MAX_AGE_SECONDS)")
+    parser.add_argument("--check-interval-hours", type=int, metavar="HRS", help="Refresh interval in hours (overrides ZS_CHECK_INTERVAL_HOURS)")
+    parser.add_argument("--device", choices=["auto", "arista", "eos", "juniper", "junos", "cisco", "ios", "ios-xe", "nxos"],
+                        help="Output format (overrides ZS_DEVICE)")
+    parser.add_argument("--acl-name", metavar="NAME", help="ACL/filter name (overrides ZS_ACL_NAME)")
+    parser.add_argument("--cache-file", metavar="PATH", help="Path to cache file (overrides ZS_CACHE_FILE)")
+    parser.add_argument("--output-file", "-o", metavar="PATH", help="Write config to file (overrides ZS_OUTPUT_FILE)")
     args = parser.parse_args()
 
-    url = env("ZS_URL") or DEFAULT_URL
-    cache_file = Path(env("ZS_CACHE_FILE") or DEFAULT_CACHE_FILE)
-    hours = env_int("ZS_CHECK_INTERVAL_HOURS", 0)
+    url = _resolve("ZS_URL", args.url, DEFAULT_URL)
+    cache_file = Path(_resolve("ZS_CACHE_FILE", args.cache_file, DEFAULT_CACHE_FILE))
+    hours = _resolve_int("ZS_CHECK_INTERVAL_HOURS", args.check_interval_hours, 0)
     if hours > 0:
         max_age = hours * 3600
     else:
-        max_age = env_int("ZS_CACHE_MAX_AGE_SECONDS", DEFAULT_CACHE_MAX_AGE_SECONDS)
+        max_age = _resolve_int("ZS_CACHE_MAX_AGE_SECONDS", args.cache_max_age, DEFAULT_CACHE_MAX_AGE_SECONDS)
 
     data = get_json(url, cache_file, max_age)
     cc = parse_continents_cities(data)
@@ -377,7 +404,7 @@ def main() -> None:
         if args.list_continents:
             return
     if args.list or args.list_cities:
-        continents_filter = normalize_filters(env("ZS_CONTINENTS"))
+        continents_filter = normalize_filters(_resolve("ZS_CONTINENTS", args.continents))
         for cont_name, cities_map in sorted(cc.items()):
             if continents_filter and cont_name.strip().lower() not in {c.lower() for c in continents_filter}:
                 continue
@@ -386,20 +413,20 @@ def main() -> None:
         if args.list or args.list_cities:
             return
 
-    continents = normalize_filters(env("ZS_CONTINENTS"))
-    cities = normalize_filters(env("ZS_CITIES"))
+    continents = normalize_filters(_resolve("ZS_CONTINENTS", args.continents))
+    cities = normalize_filters(_resolve("ZS_CITIES", args.cities))
 
     ranges, used_flat_format = collect_ranges(data, continents, cities)
     if not ranges:
-        print("No ranges selected. Check ZS_CONTINENTS and ZS_CITIES.", file=sys.stderr)
+        print("No ranges selected. Check --continents and --cities (or ZS_CONTINENTS and ZS_CITIES).", file=sys.stderr)
         sys.exit(1)
     if used_flat_format:
         print(
-            "Note: This feed uses a flat prefix list; ZS_CONTINENTS/ZS_CITIES are ignored and all prefixes are included.",
+            "Note: This feed uses a flat prefix list; --continents/--cities are ignored and all prefixes are included.",
             file=sys.stderr,
         )
 
-    device_raw = (env("ZS_DEVICE") or "auto").strip().lower()
+    device_raw = (_resolve("ZS_DEVICE", args.device) or "auto").strip().lower()
     if device_raw == "auto":
         device = detect_device()
     else:
@@ -410,11 +437,11 @@ def main() -> None:
             else "cisco"
         )
 
-    acl_name = env("ZS_ACL_NAME") or DEFAULT_ACL_NAME
+    acl_name = _resolve("ZS_ACL_NAME", args.acl_name, DEFAULT_ACL_NAME)
     lines = generate_acl(device, acl_name, ranges)
     output = "\n".join(lines)
 
-    out_path = env("ZS_OUTPUT_FILE")
+    out_path = _resolve("ZS_OUTPUT_FILE", args.output_file)
     if out_path:
         Path(out_path).write_text(output)
         print(f"Wrote {len(ranges)} ranges ({device}) to {out_path}", file=sys.stderr)
