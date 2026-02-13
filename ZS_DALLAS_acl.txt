@@ -1,0 +1,20 @@
+ip access-list extended ZS_DALLAS
+ permit ip any 136.226.100.0 0.0.1.255
+ permit ip any 136.226.102.0 0.0.1.255
+ permit ip any 136.226.104.0 0.0.1.255
+ permit ip any 136.226.114.0 0.0.1.255
+ permit ip any 136.226.116.0 0.0.1.255
+ permit ip any 165.225.216.0 0.0.1.255
+ permit ip any 165.225.32.0 0.0.1.255
+ permit ip any 165.225.34.0 0.0.1.255
+ permit ip any 165.225.36.0 0.0.1.255
+ permit ip any 170.85.100.0 0.0.1.255
+ permit ip any 170.85.102.0 0.0.1.255
+ permit ip any 170.85.104.0 0.0.1.255
+ permit ip any 170.85.96.0 0.0.1.255
+ permit ip any 170.85.98.0 0.0.1.255
+!
+ipv6 access-list ZS_DALLAS-v6
+ permit ipv6 any 2605:4300:1e00::/40
+ permit ipv6 any 2605:4300:2e00::/40
+!
